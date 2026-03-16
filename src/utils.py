@@ -176,8 +176,8 @@ def get_supported_version(package_name: str, cli: str, patches: str) -> Optional
     output = run_process([
         'java', '-jar', cli,
         'list-versions',
-        '-f', package_name,
-        patches
+        '--filter', package_name,
+        '--patches', patches
     ], capture=True, silent=True)
 
     if not output:
