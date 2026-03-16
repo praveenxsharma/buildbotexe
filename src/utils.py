@@ -158,13 +158,11 @@ def get_highest_version(versions: list[str]) -> str | None:
 def get_supported_version(package_name: str, cli: str, patches: str) -> Optional[str]:
     cli_str = str(cli).lower()
     
+    # Extract the FIRST number after "cli-" to get the exact major version safely
     is_v6_plus = False
-    if "revanced" in cli_str:
-        match = re.search(r'revanced-cli-(\d+)', cli_str)
-        if match and int(match.group(1)) >= 6:
-            is_v6_plus = True
-        elif "6." in cli_str:
-            is_v6_plus = True
+    match = re.search(r'cli-(\d+)', cli_str)
+    if match and int(match.group(1)) >= 6:
+        is_v6_plus = True
 
     if is_v6_plus:
         cmd = [
