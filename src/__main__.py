@@ -159,14 +159,14 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         logging.info("🔧 Using ReVanced patching system...")
         cli_str = str(cli).lower()
         
-        # Regex to safely check the exact major version number
-        is_v6_plus = False
+        major_version = 0
         match = re.search(r'cli-(\d+)', cli_str)
-        if match and int(match.group(1)) >= 6:
-            is_v6_plus = True
+        if match:
+            major_version = int(match.group(1))
+        elif "6." in cli_str:
+            major_version = 6
                 
-        if is_v6_plus:
-            # v6.0.0+ Documentation Syntax
+        if major_version >= 6:
             patch_cmd = [
                 "java", "-jar", str(cli),
                 "patch",
@@ -175,8 +175,16 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 "--out", str(output_apk),
                 str(input_apk)
             ]
+        elif major_version == 4:
+            patch_cmd = [
+                "java", "-jar", str(cli),
+                "patch", 
+                "-b", str(patches),
+                "--out", str(output_apk), 
+                str(input_apk),
+                *exclude_patches, *include_patches
+            ]
         else:
-            # Legacy Syntax
             patch_cmd = [
                 "java", "-jar", str(cli),
                 "patch", 
@@ -186,7 +194,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 *exclude_patches, *include_patches
             ]
 
-    logging.info(f"🚀 Running patch command: {' '.join(patch_cmd)}")
+    logging.info(f"🚀 Running patch command (CLI v{major_version}): {' '.join(patch_cmd)}")
     utils.run_process(patch_cmd, stream=True)
 
     input_apk.unlink(missing_ok=True)
