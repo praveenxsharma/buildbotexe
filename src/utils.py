@@ -21,9 +21,6 @@ def _parseparam(s):
 
 
 def parse_header(line):
-    """Parse a Content-type like header.
-    Return the main content-type and a dictionary of options.
-    """
     parts = _parseparam(";" + line)
     key = parts.__next__()
     pdict = {}
@@ -39,47 +36,35 @@ def parse_header(line):
     return key, pdict
 
 def find_file(files: list[Path], prefix: str = None, suffix: str = None, contains: str = None, exclude: list = None) -> Path | None:
-    """Find a file with various matching criteria"""
     if exclude is None:
         exclude = []
     
     for file in files:
-        # Skip excluded patterns
         if any(excl.lower() in file.name.lower() for excl in exclude):
             continue
             
-        # Check all criteria
         matches = True
-        
         if prefix and not file.name.startswith(prefix):
             matches = False
-            
         if suffix and not file.name.endswith(suffix):
             matches = False
-            
         if contains and contains.lower() not in file.name.lower():
             matches = False
             
         if matches:
             return file
     
-    # If not found with exclude, try without exclude (for fallback)
     if exclude:
         for file in files:
             matches = True
-            
             if prefix and not file.name.startswith(prefix):
                 matches = False
-                
             if suffix and not file.name.endswith(suffix):
                 matches = False
-                
             if contains and contains.lower() not in file.name.lower():
                 matches = False
-                
             if matches:
                 return file
-    
     return None
 
 def find_apksigner() -> str | None:
@@ -151,12 +136,10 @@ def normalize_version(version: str) -> list[int]:
         else:
             normalized.append(0)
     
-    # Include build number in comparison for versions like "6.6 build 002"
     build_match = re.search(r'build\s+(\d+)', version, re.IGNORECASE)
     if build_match:
         normalized.append(int(build_match.group(1)))
     
-    # Also check for parentheses format like "32.30.0(1575420)"
     paren_match = re.search(r'\((\d+)\)$', version)
     if paren_match:
         normalized.append(int(paren_match.group(1)))
@@ -173,22 +156,24 @@ def get_highest_version(versions: list[str]) -> str | None:
     return highest_version
 
 def get_supported_version(package_name: str, cli: str, patches: str) -> Optional[str]:
-    # Robust v6 detection: looking for "6." and "revanced" in the filename/path
-    # We cast to string and lowercase to be safe
-    cli_path_str = str(cli).lower()
-    is_v6 = "6." in cli_path_str and "revanced" in cli_path_str
+    cli_str = str(cli).lower()
+    
+    is_v6_plus = False
+    if "revanced" in cli_str:
+        match = re.search(r'revanced-cli-(\d+)', cli_str)
+        if match and int(match.group(1)) >= 6:
+            is_v6_plus = True
+        elif "6." in cli_str:
+            is_v6_plus = True
 
-    if is_v6:
-        # v6.0.0+ Syntax: -p is required for patches, -b for bypass, -f for filter
+    if is_v6_plus:
         cmd = [
             'java', '-jar', str(cli),
             'list-versions',
             '-f', package_name,
-            '-p', str(patches),
-            '-b'
+            '-b', '-p', str(patches)
         ]
     else:
-        # Legacy Syntax
         cmd = [
             'java', '-jar', str(cli),
             'list-versions',
@@ -196,12 +181,11 @@ def get_supported_version(package_name: str, cli: str, patches: str) -> Optional
             str(patches)
         ]
 
-logging.info(f"DEBUG: is_v6={is_v6} | Command: {' '.join(cmd)}")
-    
+    logging.info(f"🚀 Running version check: {' '.join(cmd)}")
     output = run_process(cmd, capture=True, silent=True)
 
     if not output:
-        logging.warning(f"No output from CLI version check for {package_name}")
+        logging.warning(f"No output returned from list-versions for {package_name}")
         return None
 
     lines = output.splitlines()
@@ -210,18 +194,17 @@ logging.info(f"DEBUG: is_v6={is_v6} | Command: {' '.join(cmd)}")
 
     for line in lines:
         line = line.strip()
-        # Skip headers like "Package name:" or "Most common compatible versions:"
-        if any(x in line for x in ['Package', 'versions', 'patches']):
+        if not line or any(x in line for x in ['Package name', 'Most common', 'Compatible versions']):
             continue
+            
         match = version_pattern.search(line)
         if match:
             versions.append(match.group())
 
     if not versions:
-        logging.warning(f"No compatible versions found in CLI output for {package_name}")
+        logging.warning(f"No compatible versions found in output for {package_name}")
         return None
 
-    logging.info(f"Found versions: {versions}")
     return get_highest_version(versions)
 
 def extract_filename(response, fallback_url=None) -> str:
@@ -282,7 +265,6 @@ def detect_github_release(user: str, repo: str, tag: str) -> dict:
         raise
 
 def detect_source_type(cli_file: Path, patches_file: Path) -> str:
-    """Detect if we're using Morphe or ReVanced based on downloaded files"""
     if cli_file and "morphe" in cli_file.name.lower() and patches_file and patches_file.suffix == ".mpp":
         return "morphe"
     elif cli_file and "revanced" in cli_file.name.lower() and patches_file and patches_file.suffix in [".jar", ".rvp"]:
