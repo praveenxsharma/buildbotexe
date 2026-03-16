@@ -122,9 +122,9 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             logging.error("Merged APK file not found")
             exit(1)
 
-        # Clean up filename: remove build number like (1575420) and -1575420
-        clean_name = re.sub(r'\(\d+\)', '', merged_apk.name)  # Remove (1575420)
-        clean_name = re.sub(r'-\d+_', '_', clean_name)  # Remove -1575420_ -> _
+        # Clean up filename
+        clean_name = re.sub(r'\(\d+\)', '', merged_apk.name)
+        clean_name = re.sub(r'-\d+_', '_', clean_name)
         if clean_name != merged_apk.name:
             clean_apk = merged_apk.with_name(clean_name)
             merged_apk.rename(clean_apk)
@@ -136,22 +136,17 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     # ARCHITECTURE-SPECIFIC PROCESSING
     if arch != "universal":
         logging.info(f"Processing APK for {arch} architecture...")
-        
-        # Remove unwanted architectures based on selected arch
         if arch == "arm64-v8a":
-            # Remove x86, x86_64, and armeabi-v7a
             utils.run_process([
                 "zip", "--delete", str(input_apk), 
                 "lib/x86/*", "lib/x86_64/*", "lib/armeabi-v7a/*"
             ], silent=True, check=False)
         elif arch == "armeabi-v7a":
-            # Remove x86, x86_64, and arm64-v8a
             utils.run_process([
                 "zip", "--delete", str(input_apk),
                 "lib/x86/*", "lib/x86_64/*", "lib/arm64-v8a/*"
             ], silent=True, check=False)
     else:
-        # Universal: only remove x86 architectures
         utils.run_process([
             "zip", "--delete", str(input_apk), 
             "lib/x86/*", "lib/x86_64/*"
@@ -170,7 +165,7 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 elif line.startswith('+'):
                     include_patches.extend(["-e", line[1:].strip()])
 
-    # FIX: Repair corrupted APK from Uptodown
+    # FIX: Repair corrupted APK
     logging.info("Checking APK for corruption...")
     try:
         fixed_apk = Path(f"{app_name}-fixed-v{version}.apk")
@@ -185,16 +180,12 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     except Exception as e:
         logging.warning(f"Could not fix APK: {e}")
 
-    # Include architecture in output filename
     output_apk = Path(f"{app_name}-{arch}-patch-v{version}.apk")
 
     # USE DIFFERENT COMMANDS BASED ON SOURCE TYPE
     if is_morphe:
         logging.info("🔧 Using Morphe patching system...")
-        # Morphe CLI might have different arguments - we need to test this
-        # Try common patterns
         try:
-            # Try ReVanced-style arguments first (most likely)
             morphe_cmd = [
                 "java", "-jar", str(cli),
                 "patch", "--patches", str(patches),
@@ -203,7 +194,6 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             ]
             utils.run_process(morphe_cmd, stream=True)
         except subprocess.CalledProcessError:
-            # Try alternative Morphe arguments
             logging.info("Trying alternative Morphe command format...")
             morphe_cmd = [
                 "java", "-jar", str(cli),
@@ -214,17 +204,34 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             utils.run_process(morphe_cmd, stream=True)
     else:
         logging.info("🔧 Using ReVanced patching system...")
-        # Standard ReVanced command
-        utils.run_process([
-            "java", "-jar", str(cli),
-            "patch", "--patches", str(patches),
-            "--out", str(output_apk), str(input_apk),
-            *exclude_patches, *include_patches
-        ], stream=True)
+        
+        # Check for ReVanced CLI v6.0.0+
+        is_v6 = "6." in str(cli)
+        
+        if is_v6:
+            # v6.0.0 Syntax: -p is required for patches, -b to bypass signature check
+            patch_cmd = [
+                "java", "-jar", str(cli),
+                "patch",
+                "-p", str(patches),
+                "-b",
+                "--out", str(output_apk),
+                str(input_apk),
+                *exclude_patches, *include_patches
+            ]
+        else:
+            # Legacy Syntax
+            patch_cmd = [
+                "java", "-jar", str(cli),
+                "patch", "--patches", str(patches),
+                "--out", str(output_apk), str(input_apk),
+                *exclude_patches, *include_patches
+            ]
+            
+        utils.run_process(patch_cmd, stream=True)
 
     input_apk.unlink(missing_ok=True)
 
-    # Include architecture in final signed APK name
     signed_apk = Path(f"{app_name}-{arch}-{name}-v{version}.apk")
 
     apksigner = utils.find_apksigner()
@@ -267,20 +274,17 @@ def main():
         logging.error("APP_NAME and SOURCE environment variables must be set")
         exit(1)
 
-    # Read arch-config.json
     arch_config_path = Path("arch-config.json")
     if arch_config_path.exists():
         with open(arch_config_path) as f:
             arch_config = json.load(f)
         
-        # Find arches for this app
-        arches = ["universal"]  # default
+        arches = ["universal"]
         for config in arch_config:
             if config["app_name"] == app_name and config["source"] == source:
                 arches = config["arches"]
                 break
         
-        # Build for each architecture
         built_apks = []
         for arch in arches:
             logging.info(f"🔨 Building {app_name} for {arch} architecture...")
@@ -289,13 +293,11 @@ def main():
                 built_apks.append(apk_path)
                 print(f"✅ Built {arch} version: {Path(apk_path).name}")
         
-        # Summary
         print(f"\n🎯 Built {len(built_apks)} APK(s) for {app_name}:")
         for apk in built_apks:
             print(f"  📱 {Path(apk).name}")
         
     else:
-        # Fallback to single universal build
         logging.warning("arch-config.json not found, building universal only")
         apk_path = run_build(app_name, source, "universal")
         if apk_path:
