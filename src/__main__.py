@@ -53,33 +53,26 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
 
     # FIND FILES BASED ON DETECTED TYPE
     if is_morphe:
-        # Find Morphe files - prefer non-dev version
         cli = utils.find_file(download_files, contains="morphe-cli", suffix=".jar", exclude=["dev"])
         if not cli:
-            # Fallback to any Morphe CLI
             cli = utils.find_file(download_files, contains="morphe", suffix=".jar")
         
         patches = utils.find_file(download_files, contains="patches", suffix=".mpp")
         if not patches:
-            # Fallback to any .mpp file
             patches = utils.find_file(download_files, suffix=".mpp")
     else:
-        # Find ReVanced files
         cli = utils.find_file(download_files, contains="revanced-cli", suffix=".jar")
         patches = utils.find_file(download_files, contains="patches", suffix=".rvp")
         
         if not patches:
-            # Try .jar extension for patches
             patches = utils.find_file(download_files, contains="patches", suffix=".jar")
 
     # Validate tools
     if not cli:
         logging.error(f"❌ CLI not found for source: {source}")
-        logging.error(f"Available files: {[f.name for f in download_files]}")
         return None
     if not patches:
         logging.error(f"❌ Patches not found for source: {source}")
-        logging.error(f"Available files: {[f.name for f in download_files]}")
         return None
 
     logging.info(f"✅ Using CLI: {cli.name}")
@@ -101,13 +94,11 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
             
     if input_apk is None:
         logging.error(f"❌ Failed to download APK for {app_name}")
-        logging.error("All download sources failed. Skipping this app.")
         return None
 
     if input_apk.suffix != ".apk":
         logging.warning("Input file is not .apk, using APKEditor to merge")
         apk_editor = downloader.download_apkeditor()
-
         merged_apk = input_apk.with_suffix(".apk")
 
         utils.run_process([
@@ -117,40 +108,17 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
         ], silent=True)
 
         input_apk.unlink(missing_ok=True)
-
-        if not merged_apk.exists():
-            logging.error("Merged APK file not found")
-            exit(1)
-
-        # Clean up filename
-        clean_name = re.sub(r'\(\d+\)', '', merged_apk.name)
-        clean_name = re.sub(r'-\d+_', '_', clean_name)
-        if clean_name != merged_apk.name:
-            clean_apk = merged_apk.with_name(clean_name)
-            merged_apk.rename(clean_apk)
-            merged_apk = clean_apk
-
         input_apk = merged_apk
-        logging.info(f"Merged APK file generated: {input_apk}")
 
     # ARCHITECTURE-SPECIFIC PROCESSING
     if arch != "universal":
         logging.info(f"Processing APK for {arch} architecture...")
         if arch == "arm64-v8a":
-            utils.run_process([
-                "zip", "--delete", str(input_apk), 
-                "lib/x86/*", "lib/x86_64/*", "lib/armeabi-v7a/*"
-            ], silent=True, check=False)
+            utils.run_process(["zip", "--delete", str(input_apk), "lib/x86/*", "lib/x86_64/*", "lib/armeabi-v7a/*"], silent=True, check=False)
         elif arch == "armeabi-v7a":
-            utils.run_process([
-                "zip", "--delete", str(input_apk),
-                "lib/x86/*", "lib/x86_64/*", "lib/arm64-v8a/*"
-            ], silent=True, check=False)
+            utils.run_process(["zip", "--delete", str(input_apk), "lib/x86/*", "lib/x86_64/*", "lib/arm64-v8a/*"], silent=True, check=False)
     else:
-        utils.run_process([
-            "zip", "--delete", str(input_apk), 
-            "lib/x86/*", "lib/x86_64/*"
-        ], silent=True, check=False)
+        utils.run_process(["zip", "--delete", str(input_apk), "lib/x86/*", "lib/x86_64/*"], silent=True, check=False)
 
     exclude_patches = []
     include_patches = []
@@ -165,51 +133,26 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 elif line.startswith('+'):
                     include_patches.extend(["-e", line[1:].strip()])
 
-    # FIX: Repair corrupted APK
-    logging.info("Checking APK for corruption...")
-    try:
-        fixed_apk = Path(f"{app_name}-fixed-v{version}.apk")
-        subprocess.run([
-            "zip", "-FF", str(input_apk), "--out", str(fixed_apk)
-        ], check=False, capture_output=True)
-        
-        if fixed_apk.exists() and fixed_apk.stat().st_size > 0:
-            input_apk.unlink(missing_ok=True)
-            fixed_apk.rename(input_apk)
-            logging.info("APK fixed successfully")
-    except Exception as e:
-        logging.warning(f"Could not fix APK: {e}")
-
     output_apk = Path(f"{app_name}-{arch}-patch-v{version}.apk")
 
     # USE DIFFERENT COMMANDS BASED ON SOURCE TYPE
     if is_morphe:
         logging.info("🔧 Using Morphe patching system...")
-        try:
-            morphe_cmd = [
-                "java", "-jar", str(cli),
-                "patch", "--patches", str(patches),
-                "--out", str(output_apk), str(input_apk),
-                *exclude_patches, *include_patches
-            ]
-            utils.run_process(morphe_cmd, stream=True)
-        except subprocess.CalledProcessError:
-            logging.info("Trying alternative Morphe command format...")
-            morphe_cmd = [
-                "java", "-jar", str(cli),
-                "--patches", str(patches),
-                "--input", str(input_apk),
-                "--output", str(output_apk)
-            ]
-            utils.run_process(morphe_cmd, stream=True)
+        patch_cmd = [
+            "java", "-jar", str(cli),
+            "patch", "--patches", str(patches),
+            "--out", str(output_apk), str(input_apk),
+            *exclude_patches, *include_patches
+        ]
     else:
         logging.info("🔧 Using ReVanced patching system...")
         
-        # Check for ReVanced CLI v6.0.0+
-        is_v6 = "6." in str(cli)
+        # Robust CLI v6 detection
+        cli_str = str(cli).lower()
+        is_v6 = "6." in cli_str and "revanced" in cli_str
         
         if is_v6:
-            # v6.0.0 Syntax: -p is required for patches, -b to bypass signature check
+            # v6.0.0 Syntax: -p and -b are MANDATORY. input is positional.
             patch_cmd = [
                 "java", "-jar", str(cli),
                 "patch",
@@ -228,80 +171,55 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
                 *exclude_patches, *include_patches
             ]
             
-        utils.run_process(patch_cmd, stream=True)
+    logging.info(f"🚀 Executing Patch: {' '.join(patch_cmd)}")
+    utils.run_process(patch_cmd, stream=True)
 
     input_apk.unlink(missing_ok=True)
-
     signed_apk = Path(f"{app_name}-{arch}-{name}-v{version}.apk")
 
     apksigner = utils.find_apksigner()
     if not apksigner:
         exit(1)
 
-    try:
-        utils.run_process([
-            str(apksigner), "sign", "--verbose",
-            "--ks", "keystore/public.jks",
-            "--ks-pass", "pass:public",
-            "--key-pass", "pass:public",
-            "--ks-key-alias", "public",
-            "--in", str(output_apk), "--out", str(signed_apk)
-        ], stream=True)
-    except Exception as e:
-        logging.warning(f"Standard signing failed: {e}")
-        logging.info("Trying alternative signing method...")
-        
-        utils.run_process([
-            str(apksigner), "sign", "--verbose",
-            "--min-sdk-version", "21",
-            "--ks", "keystore/public.jks",
-            "--ks-pass", "pass:public",
-            "--key-pass", "pass:public",
-            "--ks-key-alias", "public",
-            "--in", str(output_apk), "--out", str(signed_apk)
-        ], stream=True)
+    utils.run_process([
+        str(apksigner), "sign", "--verbose",
+        "--ks", "keystore/public.jks",
+        "--ks-pass", "pass:public",
+        "--key-pass", "pass:public",
+        "--ks-key-alias", "public",
+        "--in", str(output_apk), "--out", str(signed_apk)
+    ], stream=True)
 
     output_apk.unlink(missing_ok=True)
     print(f"✅ APK built: {signed_apk.name}")
-    
     return str(signed_apk)
 
 def main():
     app_name = getenv("APP_NAME")
     source = getenv("SOURCE")
-
     if not app_name or not source:
         logging.error("APP_NAME and SOURCE environment variables must be set")
         exit(1)
 
     arch_config_path = Path("arch-config.json")
+    arches = ["universal"]
     if arch_config_path.exists():
         with open(arch_config_path) as f:
             arch_config = json.load(f)
-        
-        arches = ["universal"]
         for config in arch_config:
             if config["app_name"] == app_name and config["source"] == source:
                 arches = config["arches"]
                 break
-        
-        built_apks = []
-        for arch in arches:
-            logging.info(f"🔨 Building {app_name} for {arch} architecture...")
-            apk_path = run_build(app_name, source, arch)
-            if apk_path:
-                built_apks.append(apk_path)
-                print(f"✅ Built {arch} version: {Path(apk_path).name}")
-        
-        print(f"\n🎯 Built {len(built_apks)} APK(s) for {app_name}:")
-        for apk in built_apks:
-            print(f"  📱 {Path(apk).name}")
-        
-    else:
-        logging.warning("arch-config.json not found, building universal only")
-        apk_path = run_build(app_name, source, "universal")
+    
+    built_apks = []
+    for arch in arches:
+        logging.info(f"🔨 Building {app_name} for {arch} architecture...")
+        apk_path = run_build(app_name, source, arch)
         if apk_path:
-            print(f"🎯 Final APK path: {apk_path}")
+            built_apks.append(apk_path)
+    
+    for apk in built_apks:
+        print(f"🎯 Final APK: {Path(apk).name}")
 
 if __name__ == "__main__":
     main()
