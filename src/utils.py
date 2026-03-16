@@ -173,11 +173,13 @@ def get_highest_version(versions: list[str]) -> str | None:
     return highest_version
 
 def get_supported_version(package_name: str, cli: str, patches: str) -> Optional[str]:
-    # Detect CLI version
-    is_v6 = "6." in cli and "revanced" in cli.lower()
+    # Robust v6 detection: looking for "6." and "revanced" in the filename/path
+    # We cast to string and lowercase to be safe
+    cli_str = str(cli).lower()
+    is_v6 = "6." in cli_str and "revanced" in cli_str
 
     if is_v6:
-        # v6.0.0+ Syntax: requires -p (patches) and -b (bypass-verification)
+        # v6.0.0+ Syntax: -p is required for patches, -b for bypass, -f for filter
         cmd = [
             'java', '-jar', cli,
             'list-versions',
@@ -194,30 +196,35 @@ def get_supported_version(package_name: str, cli: str, patches: str) -> Optional
             patches
         ]
 
+    # Added logging so you can see exactly what is being sent to the terminal
+    logging.info(f"Executing: {' '.join(cmd)}")
+    
     output = run_process(cmd, capture=True, silent=True)
 
     if not output:
-        logging.warning(f"No output returned from list-versions for {package_name}")
+        logging.warning(f"No output returned from CLI for {package_name}")
         return None
 
     lines = output.splitlines()
     versions = []
-    # Regex to catch version patterns like 10.1.2 or 32.30.0(12345)
-    version_pattern = re.compile(r'\d+(\.\d+)+(\(\d+\))?(\sbuild\s\d+)?')
+    # Catch version patterns (e.g., 10.1.2 or 32.30.0)
+    version_pattern = re.compile(r'\d+(\.\d+)+')
 
     for line in lines:
         line = line.strip()
-        if line and 'Any' not in line and 'Package' not in line:
-            match = version_pattern.search(line)
-            if match:
-                # Extract only the version part if build info is separate
-                versions.append(match.group())
+        # Skip headers
+        if any(x in line for x in ['Package name', 'Most common', 'Compatible versions']):
+            continue
+            
+        match = version_pattern.search(line)
+        if match:
+            versions.append(match.group())
 
     if not versions:
-        logging.warning(f"No compatible versions found in CLI output for {package_name}")
+        logging.warning(f"No compatible versions parsed from output for {package_name}")
         return None
 
-    logging.info(f"CLI parsed compatible versions: {versions}")
+    logging.info(f"Parsed versions: {versions}")
     return get_highest_version(versions)
 
 def extract_filename(response, fallback_url=None) -> str:
