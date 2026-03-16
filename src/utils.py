@@ -173,43 +173,51 @@ def get_highest_version(versions: list[str]) -> str | None:
     return highest_version
 
 def get_supported_version(package_name: str, cli: str, patches: str) -> Optional[str]:
-    output = run_process([
-        'java', '-jar', cli,
-        'list-versions',
-        '--filter', package_name,
-        '--patches', patches
-    ], capture=True, silent=True)
+    # Detect CLI version
+    is_v6 = "6." in cli and "revanced" in cli.lower()
+
+    if is_v6:
+        # v6.0.0+ Syntax: requires -p (patches) and -b (bypass-verification)
+        cmd = [
+            'java', '-jar', cli,
+            'list-versions',
+            '-f', package_name,
+            '-p', patches,
+            '-b'
+        ]
+    else:
+        # Legacy Syntax
+        cmd = [
+            'java', '-jar', cli,
+            'list-versions',
+            '-f', package_name,
+            patches
+        ]
+
+    output = run_process(cmd, capture=True, silent=True)
 
     if not output:
-        logging.warning("No output returned from list-versions command")
+        logging.warning(f"No output returned from list-versions for {package_name}")
         return None
 
     lines = output.splitlines()
-    logging.info(f"CLI raw output lines: {lines}")
-    
-    if len(lines) <= 2:
-        logging.warning("Output has no version lines")
-        return None
-
     versions = []
-    for line in lines[2:]:
+    # Regex to catch version patterns like 10.1.2 or 32.30.0(12345)
+    version_pattern = re.compile(r'\d+(\.\d+)+(\(\d+\))?(\sbuild\s\d+)?')
+
+    for line in lines:
         line = line.strip()
-        if line and 'Any' not in line:
-            # Parse version - may include "build XXX" suffix
-            # Format: "6.6 build 002" or "32.30.0(1575420)" or just "6.6"
-            parts = line.split()
-            if parts:
-                version = parts[0]
-                # Check if next parts are "build XXX"
-                if len(parts) >= 3 and parts[1].lower() == 'build':
-                    version = f"{parts[0]} build {parts[2]}"
-                versions.append(version)
+        if line and 'Any' not in line and 'Package' not in line:
+            match = version_pattern.search(line)
+            if match:
+                # Extract only the version part if build info is separate
+                versions.append(match.group())
 
     if not versions:
-        logging.warning("No supported versions found")
+        logging.warning(f"No compatible versions found in CLI output for {package_name}")
         return None
 
-    logging.info(f"CLI parsed versions: {versions}")
+    logging.info(f"CLI parsed compatible versions: {versions}")
     return get_highest_version(versions)
 
 def extract_filename(response, fallback_url=None) -> str:
