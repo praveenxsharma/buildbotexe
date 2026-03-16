@@ -150,6 +150,17 @@ def normalize_version(version: str) -> list[int]:
             normalized.append(int(match.group(1)))
         else:
             normalized.append(0)
+    
+    # Include build number in comparison for versions like "6.6 build 002"
+    build_match = re.search(r'build\s+(\d+)', version, re.IGNORECASE)
+    if build_match:
+        normalized.append(int(build_match.group(1)))
+    
+    # Also check for parentheses format like "32.30.0(1575420)"
+    paren_match = re.search(r'\((\d+)\)$', version)
+    if paren_match:
+        normalized.append(int(paren_match.group(1)))
+    
     return normalized
 
 def get_highest_version(versions: list[str]) -> str | None:
@@ -174,21 +185,31 @@ def get_supported_version(package_name: str, cli: str, patches: str) -> Optional
         return None
 
     lines = output.splitlines()
+    logging.info(f"CLI raw output lines: {lines}")
+    
     if len(lines) <= 2:
         logging.warning("Output has no version lines")
         return None
 
     versions = []
     for line in lines[2:]:
-        version, _, _ = line.partition(' ')
-        version = version.strip()
-        if version and 'Any' not in line:
-            versions.append(version)
+        line = line.strip()
+        if line and 'Any' not in line:
+            # Parse version - may include "build XXX" suffix
+            # Format: "6.6 build 002" or "32.30.0(1575420)" or just "6.6"
+            parts = line.split()
+            if parts:
+                version = parts[0]
+                # Check if next parts are "build XXX"
+                if len(parts) >= 3 and parts[1].lower() == 'build':
+                    version = f"{parts[0]} build {parts[2]}"
+                versions.append(version)
 
     if not versions:
         logging.warning("No supported versions found")
         return None
 
+    logging.info(f"CLI parsed versions: {versions}")
     return get_highest_version(versions)
 
 def extract_filename(response, fallback_url=None) -> str:
