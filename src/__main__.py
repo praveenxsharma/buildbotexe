@@ -13,38 +13,54 @@ from src import (
 def run_build(app_name: str, source: str, arch: str = "universal") -> str:
     download_files, name = downloader.download_required(source)
 
-    is_morphe = any(".mpp" in f.name.lower() for f in download_files) or "morphe" in source.lower()
-    
-    if is_morphe:
-        cli = utils.find_file(download_files, contains="morphe", suffix=".jar")
-        patches = utils.find_file(download_files, suffix=".mpp")
-    else:
+    # 1. Find the CLI (Look for Morphe first, then fallback to standard ReVanced)
+    cli = utils.find_file(download_files, contains="morphe", suffix=".jar")
+    if not cli:
         cli = utils.find_file(download_files, contains="cli", suffix=".jar")
+    
+    # 2. Find the Patches (Look for .mpp first, then .rvp/.jar)
+    patches = utils.find_file(download_files, suffix=".mpp")
+    if not patches:
         patches = utils.find_file(download_files, contains="patches", suffix=".rvp") or \
                   utils.find_file(download_files, contains="patches", suffix=".jar")
 
     if not cli or not patches:
         logging.error(f"❌ Missing tools for {source}")
+        # Log found files to help debugging
+        logging.info(f"Files found: {[f.name for f in download_files]}")
         return None
 
-    # Determine Major Version for ReVanced CLI
+    # Detect CLI Type and Version
     cli_str = cli.name.lower()
+    is_morphe_cli = "morphe" in cli_str
+    
     major_version = 0
     match = re.search(r'cli-v?(\d+)', cli_str)
     if match:
         major_version = int(match.group(1))
     
-    logging.info(f"✅ Using {'Morphe' if is_morphe else 'ReVanced'} CLI v{major_version if major_version else '?'}: {cli.name}")
+    logging.info(f"✅ Toolchain: {'Morphe' if is_morphe_cli else 'ReVanced'} CLI (v{major_version if major_version else '?'})")
+    logging.info(f"✅ Patch file: {patches.name}")
 
+    # Download the APK
     input_apk, version = None, None
     for method in [downloader.download_apkmirror, downloader.download_apkpure, downloader.download_uptodown]:
         input_apk, version = method(app_name, str(cli), str(patches))
         if input_apk: break
             
-    if not input_apk: return None
+    if not input_apk: 
+        logging.error(f"❌ Failed to download APK for {app_name}")
+        return None
 
-    # ... (APK merging and architecture logic remains unchanged) ...
+    # Process Architecture
+    if arch != "universal":
+        logging.info(f"Slicing APK for {arch}...")
+        if arch == "arm64-v8a":
+            utils.run_process(["zip", "--delete", str(input_apk), "lib/x86/*", "lib/x86_64/*", "lib/armeabi-v7a/*"], silent=True, check=False)
+        elif arch == "armeabi-v7a":
+            utils.run_process(["zip", "--delete", str(input_apk), "lib/x86/*", "lib/x86_64/*", "lib/arm64-v8a/*"], silent=True, check=False)
 
+    # Patch Configuration
     exclude_patches, include_patches = [], []
     patches_path = Path("patches") / f"{app_name}-{source}.txt"
     if patches_path.exists():
@@ -56,28 +72,66 @@ def run_build(app_name: str, source: str, arch: str = "universal") -> str:
 
     output_apk = Path(f"{app_name}-{arch}-patch-v{version}.apk")
 
-    if is_morphe:
-        patch_cmd = ["java", "-jar", str(cli), "patch", "--patches", str(patches), "--out", str(output_apk), str(input_apk), *exclude_patches, *include_patches]
+    # Determine Command Syntax
+    # If it's a Morphe CLI or an older ReVanced CLI (using --patches flag)
+    if is_morphe_cli:
+        patch_cmd = [
+            "java", "-jar", str(cli), "patch", 
+            "--patches", str(patches), 
+            "--out", str(output_apk), str(input_apk), 
+            *exclude_patches, *include_patches
+        ]
     else:
+        # Standard ReVanced CLI Logic
         if major_version >= 6:
-            patch_cmd = ["java", "-jar", str(cli), "patch", "-p", str(patches), *exclude_patches, *include_patches, "--out", str(output_apk), str(input_apk)]
+            patch_cmd = [
+                "java", "-jar", str(cli), "patch", 
+                "-p", str(patches), 
+                *exclude_patches, *include_patches, 
+                "--out", str(output_apk), str(input_apk)
+            ]
         elif major_version == 4:
-            patch_cmd = ["java", "-jar", str(cli), "patch", "-b", str(patches), "--out", str(output_apk), str(input_apk), *exclude_patches, *include_patches]
+            # v4.x uses -b for bundles/patches
+            patch_cmd = [
+                "java", "-jar", str(cli), "patch", 
+                "-b", str(patches), 
+                "--out", str(output_apk), str(input_apk), 
+                *exclude_patches, *include_patches
+            ]
         else:
-            patch_cmd = ["java", "-jar", str(cli), "patch", "--patches", str(patches), "--out", str(output_apk), str(input_apk), *exclude_patches, *include_patches]
+            # Fallback for other versions
+            patch_cmd = [
+                "java", "-jar", str(cli), "patch", 
+                "--patches", str(patches), 
+                "--out", str(output_apk), str(input_apk), 
+                *exclude_patches, *include_patches
+            ]
 
+    logging.info(f"🚀 Patching: {' '.join(patch_cmd)}")
     utils.run_process(patch_cmd, stream=True)
     
+    # Signing
     signed_apk = Path(f"{app_name}-{arch}-{name}-v{version}.apk")
     apksigner = utils.find_apksigner()
-    utils.run_process([str(apksigner), "sign", "--ks", "keystore/public.jks", "--ks-pass", "pass:public", "--key-pass", "pass:public", "--ks-key-alias", "public", "--in", str(output_apk), "--out", str(signed_apk)])
+    if apksigner:
+        utils.run_process([
+            str(apksigner), "sign", 
+            "--ks", "keystore/public.jks", 
+            "--ks-pass", "pass:public", 
+            "--key-pass", "pass:public", 
+            "--ks-key-alias", "public", 
+            "--in", str(output_apk), 
+            "--out", str(signed_apk)
+        ])
     
     output_apk.unlink(missing_ok=True)
     return str(signed_apk)
 
 def main():
     app_name, source = getenv("APP_NAME"), getenv("SOURCE")
-    if not app_name or not source: exit(1)
+    if not app_name or not source: 
+        logging.error("APP_NAME and SOURCE env vars required")
+        exit(1)
     
     arches = ["universal"]
     arch_path = Path("arch-config.json")
@@ -89,6 +143,7 @@ def main():
                     break
     
     for arch in arches:
+        logging.info(f"🔨 Building {app_name} ({arch})...")
         run_build(app_name, source, arch)
 
 if __name__ == "__main__":
